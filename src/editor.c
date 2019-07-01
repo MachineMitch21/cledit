@@ -6,13 +6,26 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "cdefs.h"
+#include <sys/ioctl.h>
 
+#include "cdefs.h"
+#include "editor_buffer.h"
+
+#define CLEDIT_VERSION "0.0.1"
+
+enum editorKey {
+  ARROW_LEFT = 'a',
+  ARROW_RIGHT = 'd',
+  ARROW_UP = 'w',
+  ARROW_DOWN = 's'
+};
 
 struct Editor {
-  struct termios orig_termios;
-	char cursor_col;
-	char cursor_row;
+  struct  termios orig_termios;
+  struct  editor_buffer eb;
+  int     cx, cy;
+  int     screen_cols;
+  int     screen_rows;
 };
 
 /* Internal functions */
@@ -22,19 +35,90 @@ char _editorReadKey(struct Editor* editor) {
 	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
 		if (nread == -1 && errno != EAGAIN) die("read");
 	}
-	return c;
+
+  if (c == '\x1b') {
+    char seq[3];
+
+    if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+    if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+    if (seq[0] == '[') {
+      switch (seq[1]) {
+        case 'A': return ARROW_UP;
+        case 'B': return ARROW_DOWN;
+        case 'C': return ARROW_RIGHT;
+        case 'D': return ARROW_LEFT;
+      }
+    }
+
+    return '\x1b';
+  } else {
+	  return c;
+  }
 }
 
-void _editorCursorPosEscSeq(char cursor_col, char cursor_row) {
+void _editorSetCursorPosEscSeqFull(struct Editor* editor, int cursor_col, int cursor_row) {
 	char buffer[32];
-	snprintf(buffer, 32, "\x1b[%d;%dH", cursor_col, cursor_row);
-	write(STDOUT_FILENO, buffer, strlen(buffer));
+	snprintf(buffer, 32, "\x1b[%d;%dH", 
+    (editor != NULL ? editor->cy : cursor_row) + 1, 
+    (editor != NULL ? editor->cx : cursor_col) + 1
+  );
+  if (editor != NULL) {
+	  ebAppend(&editor->eb, buffer, strlen(buffer));
+  } else {
+    write(STDOUT_FILENO, buffer, strlen(buffer));
+  }
 }
 
-void _editorDrawRows() {
+void _editorSetCursorPosEscSeqNull(int cursor_col, int cursor_row) {
+  _editorSetCursorPosEscSeqFull(NULL, cursor_col, cursor_row);
+}
+
+void _editorSetCursorPosEscSeqDirect(struct Editor* editor) {
+  if (editor == NULL) die("_editorSetCursorPosEscSeqDirect");
+  _editorSetCursorPosEscSeqFull(editor, 0, 0);
+}
+
+void _editorMoveCursor(struct Editor* editor, char key) {
+  switch (key) {
+    case ARROW_DOWN: 
+      editor->cy++;
+      break;
+    case ARROW_UP: 
+      editor->cy--;
+      break;
+    case ARROW_RIGHT:
+      editor->cx++;
+      break;
+    case ARROW_LEFT: 
+      editor->cx--;
+      break;
+  }
+}
+
+void _editorDrawRows(struct Editor* editor) {
 	int y;
-	for (y = 0; y < 24; y++) {
-		write(STDOUT_FILENO, "~\r\n", 3);
+	for (y = 0; y < editor->screen_rows; y++) {
+    if (y == editor->screen_rows / 3) {
+      char welcome[80];
+      int welcomelen = snprintf(welcome, sizeof(welcome),
+        "CL Edit -- version %s", CLEDIT_VERSION);
+      if (welcomelen > editor->screen_cols) welcomelen = editor->screen_cols;
+      int padding = (editor->screen_rows - welcomelen) / 2;
+      if (padding) {
+        ebAppend(&editor->eb, "~", 1);
+        padding--;
+      }
+      while (padding--) ebAppend(&editor->eb, " ", 1);
+      ebAppend(&editor->eb, welcome, welcomelen);
+    } else {
+      ebAppend(&editor->eb, "~", 1);
+    }
+
+    ebAppend(&editor->eb, "\x1b[K", 3);
+    if (y < editor->screen_rows - 1) {
+      ebAppend(&editor->eb, "\r\n", 2);
+    }
 	}
 }
 
@@ -45,7 +129,10 @@ void _disableRawModeExitCb(int code, struct Editor* editor) {
 /* API functions */
 struct Editor* editorCreate(char cursor_col_pos, char cursor_row_pos) {
 	struct Editor* e = malloc(sizeof(struct Editor));
-	editorSetCursorPos(e, cursor_col_pos, cursor_row_pos);
+  if (getWindowSize(&e->screen_cols, &e->screen_rows) == -1) die("getWindowSize");
+  e->eb = EDITOR_BUFFER_INIT;
+  e->cx = 0;
+  e->cy = 0;
 	return e;
 }
 
@@ -53,21 +140,40 @@ void editorFree(struct Editor* editor) {
 	free(editor);
 }
 
-void editorSetCursorPos(struct Editor* editor, char cursor_col, char cursor_row) {
-	editor->cursor_col = (cursor_col < 1 ? 1 : cursor_col);
-	editor->cursor_row = (cursor_row < 1 ? 1 : cursor_row);
-	_editorCursorPosEscSeq(cursor_col, cursor_row);
+int getCursorPos(int* cols, int* rows) {
+  char buf[32];
+  unsigned int i = 0;
+
+  if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
+
+  while (i < sizeof(buf) - 1) {
+    if (read(STDIN_FILENO, &buf[i], 1) != 1) break;
+    if (buf[i] == 'R') break;
+    i++;
+  }
+  buf[i] = '\0';
+ 
+  if (buf[0] != '\x1b' || buf[1] != '[') return -1;
+  if (sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
+
+  return 0;
 }
 
-int editorGetCursorPos(struct Editor* editor) {
-	int cursor_pos = editor->cursor_col;
-	cursor_pos <<= 8;
-	cursor_pos |= editor->cursor_row;
-	return cursor_pos;
+int getWindowSize(int* cols, int* rows) {
+  struct winsize ws;
+
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+    if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1;
+    return getCursorPos(cols, rows);
+  } else {
+    *cols = ws.ws_col;
+    *rows = ws.ws_row;
+    return 0;
+  }
 }
 
 void die(const char* s) {
-	editorClearScreen();
+	editorClearScreen(NULL);
   perror(s);
   exit(1);
 }
@@ -94,22 +200,34 @@ void editorProcessKeypress(struct Editor* editor) {
 
 	switch (c) {
 		case CTRL_KEY('q'):
-			editorClearScreen();
+			editorClearScreen(NULL);
 			exit(0);
 			break;
+    case ARROW_UP:
+    case ARROW_DOWN:
+    case ARROW_LEFT:
+    case ARROW_RIGHT:
+      _editorMoveCursor(editor, c);
+      break;
 	}
 }
 
 void editorRefreshScreen(struct Editor* editor) {
-	write(STDOUT_FILENO, "\x1b[2J", 4);
-	char col = (editor != NULL ? editor->cursor_col : 1);
-	char row = (editor != NULL ? editor->cursor_row : 1);
-	_editorCursorPosEscSeq(col, row);
-	_editorDrawRows();
-	_editorCursorPosEscSeq(col, row);
+  editor->eb = EDITOR_BUFFER_INIT;
+  ebAppend(&editor->eb, "\x1b[?25l", 6);
+  _editorSetCursorPosEscSeqNull(0, 0);
+	_editorDrawRows(editor);
+	_editorSetCursorPosEscSeqDirect(editor);
+  ebAppend(&editor->eb, "\x1b[?25h", 6);
+  write(STDOUT_FILENO, editor->eb.buf, editor->eb.len);
+  ebFree(&editor->eb);
 }
 
-void editorClearScreen() {
-	write(STDOUT_FILENO, "\x1b[2J", 4);
-	_editorCursorPosEscSeq(1, 1);
+void editorClearScreen(struct Editor* editor) {
+  if (editor != NULL) {
+	  ebAppend(&editor->eb, "\x1b[2J", 4);
+  } else {
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+  }
+	_editorSetCursorPosEscSeqNull(0, 0);
 }
