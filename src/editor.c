@@ -14,10 +14,10 @@
 #define CLEDIT_VERSION "0.0.1"
 
 enum editorKey {
-  ARROW_LEFT = 'a',
-  ARROW_RIGHT = 'd',
-  ARROW_UP = 'w',
-  ARROW_DOWN = 's'
+  ARROW_LEFT = 1000,
+  ARROW_RIGHT,
+  ARROW_UP,
+  ARROW_DOWN
 };
 
 struct Editor {
@@ -29,7 +29,7 @@ struct Editor {
 };
 
 /* Internal functions */
-char _editorReadKey(struct Editor* editor) {
+int _editorReadKey(struct Editor* editor) {
 	int nread;
 	char c;
 	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
@@ -79,7 +79,7 @@ void _editorSetCursorPosEscSeqDirect(struct Editor* editor) {
   _editorSetCursorPosEscSeqFull(editor, 0, 0);
 }
 
-void _editorMoveCursor(struct Editor* editor, char key) {
+void _editorMoveCursor(struct Editor* editor, int key) {
   switch (key) {
     case ARROW_DOWN: 
       editor->cy++;
@@ -196,7 +196,7 @@ void disableRawMode(struct Editor* editor) {
 }
 
 void editorProcessKeypress(struct Editor* editor) {
-	char c = _editorReadKey(editor);
+	int c = _editorReadKey(editor);
 
 	switch (c) {
 		case CTRL_KEY('q'):
