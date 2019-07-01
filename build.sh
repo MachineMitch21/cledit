@@ -7,9 +7,9 @@ mkdir -p "$obj_dir" "$out_dir"
 
 shopt -s nullglob # make sure no *.* globs with nothing get processed
 
-# for asm_file in "$src_dir"/*.asm; do
-#   nasm -isrc/ -g -f elf32 -o "$obj_dir"/$(basename "$asm_file").o "$asm_file"
-# done
+for asm_file in "$src_dir"/*.asm; do
+  nasm -isrc/ -g -f elf64 -o "$obj_dir"/$(basename "$asm_file").o "$asm_file"
+done
 
 for c_file in "$src_dir"/*.c; do
   gcc -fno-stack-protector -g -c -Wall -Wextra -pedantic -std=c99 -o "$obj_dir"/$(basename "$c_file").o "$c_file"
