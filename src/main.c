@@ -5,7 +5,7 @@
 
 int main() {
 	struct Editor* editor = editorCreate(1, 1);
-  enableRawMode();
+  enableRawMode(editor);
   while (1) {
 		editorRefreshScreen(editor);
 		editorProcessKeypress(editor);

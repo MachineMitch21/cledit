@@ -10,8 +10,8 @@
 struct Editor;
 
 void die(const char* s);
-void enableRawMode(void);
-void disableRawMode(void);
+void enableRawMode(struct Editor* editor);
+void disableRawMode(struct Editor* editor);
 
 struct Editor* editorCreate(char cursor_col_pos, char cursor_row_pos);
 void editorFree(struct Editor* editor);
